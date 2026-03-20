@@ -1,0 +1,12 @@
+[package]
+name = "speeko-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+speeko-common = { path = "../common" }
+cpal = "~0.15"
+hound = "~3.5"
+anyhow = "~1.0"
+log = "~0.4"

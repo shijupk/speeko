@@ -1,0 +1,11 @@
+[package]
+name = "speeko-dsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+speeko-common = { path = "../common" }
+rustfft = "~6.2"
+anyhow = "~1.0"
+log = "~0.4"

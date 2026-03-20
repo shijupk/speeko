@@ -1,0 +1,10 @@
+[package]
+name = "speeko-recognizer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+speeko-common = { path = "../common" }
+anyhow = "~1.0"
+log = "~0.4"

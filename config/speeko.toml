@@ -1,0 +1,39 @@
+# Speeko Configuration File
+# See docs/detailed-design-approved.md for parameter explanations.
+
+[audio]
+sample_rate = 16000
+record_duration_secs = 3.0
+max_utterance_secs = 2.0
+
+[dsp]
+pre_emphasis = 0.97
+frame_length_ms = 25.0
+frame_step_ms = 10.0
+fft_size = 512
+
+[vad]
+silence_frames = 10
+threshold_factor = 3.5
+min_utterance_ms = 200
+max_utterance_ms = 1000
+hangover_ms = 100
+padding_ms = 50
+
+[mfcc]
+num_mel_filters = 26
+num_coefficients = 13
+low_freq = 0.0
+high_freq = 8000.0
+
+[recognizer]
+confidence_threshold = 0.2
+max_distance = 40.0
+sakoe_chiba_width = 0.2
+min_samples_per_word = 3
+recommended_samples_per_word = 5
+
+[paths]
+templates_dir = "data/templates"
+recordings_dir = "data/recordings"
+vocabulary_file = "vocabulary.txt"

@@ -1,0 +1,12 @@
+# Speeko default vocabulary — one word per line.
+# Lines starting with # are comments.
+start
+stop
+open
+close
+up
+down
+left
+right
+yes
+no
