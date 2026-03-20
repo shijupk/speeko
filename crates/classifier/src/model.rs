@@ -74,7 +74,7 @@ impl<B: Backend> KeywordCnn<B> {
         let t_half = t / 2;
         let x = x.slice([0..b, 0..c, 0..(t_half * 2)]);
         let x = x.reshape([b, c, t_half, 2]);
-        let x = x.max_dim(3).squeeze();
+        let x = x.max_dim(3).reshape([b, c, t_half]);
 
         // Conv block 2: Conv1d -> BN -> ReLU -> MaxPool(2)
         let x = self.conv2.forward(x);
@@ -84,7 +84,7 @@ impl<B: Backend> KeywordCnn<B> {
         let t_half = t / 2;
         let x = x.slice([0..b, 0..c, 0..(t_half * 2)]);
         let x = x.reshape([b, c, t_half, 2]);
-        let x = x.max_dim(3).squeeze();
+        let x = x.max_dim(3).reshape([b, c, t_half]);
 
         // Conv block 3: Conv1d -> BN -> ReLU
         let x = self.conv3.forward(x);

@@ -113,7 +113,8 @@ pub fn train_cnn(
             let loss = cross_entropy_loss(log_probs.clone(), targets.clone(), vocab.num_classes(), &device);
 
             // Accuracy for this batch.
-            let preds = logits.clone().argmax(1).squeeze::<1>();
+            let batch_len = bs;
+            let preds = logits.clone().argmax(1).reshape([batch_len]);
             let correct = preds
                 .equal(targets.clone())
                 .int()
@@ -238,7 +239,7 @@ fn evaluate_accuracy<B: Backend>(
     let target = Tensor::<B, 1, Int>::from_ints(flat_labels.as_slice(), device);
 
     let logits = model.forward(input);
-    let preds = logits.argmax(1).squeeze::<1>();
+    let preds = logits.argmax(1).reshape([n]);
     let correct: i32 = preds.equal(target).int().sum().into_scalar().elem();
 
     correct as f32 / n as f32
