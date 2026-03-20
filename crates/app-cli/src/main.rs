@@ -16,6 +16,9 @@ use speeko_common::types::MfccSequence;
 use speeko_features::cmn;
 use speeko_features::delta;
 use speeko_features::mfcc::MfccExtractor;
+use speeko_classifier::dataset as cnn_dataset;
+use speeko_classifier::inference::CnnRecognizer;
+use speeko_classifier::training as cnn_training;
 use speeko_recognizer::averaging;
 use speeko_recognizer::matcher::TemplateMatcher;
 use speeko_store::templates::TemplateStore;
@@ -147,6 +150,23 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
     },
+    /// Train a CNN classifier from pre-recorded WAV files.
+    ///
+    /// Uses the same folder structure as train-from: <dir>/<word>/sample_*.wav
+    /// Set recognizer.mode = "cnn" in speeko.toml to use the CNN for recognition.
+    CnnTrain {
+        /// Directory containing word subfolders with WAV files.
+        dir: PathBuf,
+        /// Number of training epochs.
+        #[arg(long)]
+        epochs: Option<usize>,
+        /// Training batch size.
+        #[arg(long, alias = "batch-size")]
+        batch_size: Option<usize>,
+        /// Learning rate.
+        #[arg(long)]
+        lr: Option<f64>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -209,6 +229,12 @@ fn main() -> Result<()> {
         } => cmd_record_samples(&config, &words, samples, duration, output, &cancel),
         Commands::TrainFrom { dir, reset } => cmd_train_from(&config, &dir, reset),
         Commands::TestFrom { dir, verbose } => cmd_test_from(&config, &dir, verbose),
+        Commands::CnnTrain {
+            dir,
+            epochs,
+            batch_size,
+            lr,
+        } => cmd_cnn_train(&config, &dir, epochs, batch_size, lr),
     }
 }
 
@@ -400,46 +426,65 @@ fn cmd_test(
     timeout: Option<f32>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<()> {
-    let store = TemplateStore::new(&config.paths.templates_dir)?;
-    let all_templates = store.load_all_templates()?;
+    let use_cnn = config.recognizer.mode == "cnn";
 
-    if all_templates.is_empty() {
-        bail!("{}", SpeekError::NoTemplates);
-    }
-
-    // Compute mean templates for matching (reduces noise from individual recordings).
-    let templates = averaging::compute_mean_templates(&all_templates);
-    log::info!("Using {} mean templates for matching", templates.len());
-
-    // Report trained words.
-    let counts = store.template_counts()?;
-    println!("Loaded templates for {} words:", counts.len());
-    for (word, count) in &counts {
-        println!("  {} ({} samples -> 1 mean template)", word, count);
-    }
-
-    if config.paths.vocabulary_file.exists() {
-        let vocab = vocabulary::load_vocabulary(&config.paths.vocabulary_file)?;
-        let trained_words: Vec<&str> = counts.iter().map(|(w, _)| w.as_str()).collect();
-        let missing: Vec<&str> = vocab
-            .iter()
-            .filter(|w| !trained_words.contains(&w.as_str()))
-            .map(|w| w.as_str())
-            .collect();
-        if !missing.is_empty() {
-            eprintln!(
-                "WARNING: {} vocabulary words not trained: {}",
-                missing.len(),
-                missing.join(", ")
-            );
+    // Load DTW templates (needed unless using CNN).
+    let templates;
+    let matcher;
+    if !use_cnn {
+        let store = TemplateStore::new(&config.paths.templates_dir)?;
+        let all_templates = store.load_all_templates()?;
+        if all_templates.is_empty() {
+            bail!("{}", SpeekError::NoTemplates);
         }
+        let mean_templates = averaging::compute_mean_templates(&all_templates);
+        log::info!("Using {} mean templates for matching", mean_templates.len());
+        let counts = store.template_counts()?;
+        println!("Mode: DTW");
+        println!("Loaded templates for {} words:", counts.len());
+        for (word, count) in &counts {
+            println!("  {} ({} samples -> 1 mean template)", word, count);
+        }
+        if config.paths.vocabulary_file.exists() {
+            let vocab = vocabulary::load_vocabulary(&config.paths.vocabulary_file)?;
+            let trained_words: Vec<&str> = counts.iter().map(|(w, _)| w.as_str()).collect();
+            let missing: Vec<&str> = vocab
+                .iter()
+                .filter(|w| !trained_words.contains(&w.as_str()))
+                .map(|w| w.as_str())
+                .collect();
+            if !missing.is_empty() {
+                eprintln!(
+                    "WARNING: {} vocabulary words not trained: {}",
+                    missing.len(),
+                    missing.join(", ")
+                );
+            }
+        }
+        templates = Some(mean_templates);
+        matcher = Some(TemplateMatcher::new(
+            config.recognizer.sakoe_chiba_width,
+            config.recognizer.confidence_threshold,
+            config.recognizer.max_distance,
+        ));
+    } else {
+        templates = None;
+        matcher = None;
     }
 
-    let matcher = TemplateMatcher::new(
-        config.recognizer.sakoe_chiba_width,
-        config.recognizer.confidence_threshold,
-        config.recognizer.max_distance,
-    );
+    // Load CNN model if needed.
+    let cnn = if use_cnn {
+        println!("Mode: CNN");
+        let recognizer = CnnRecognizer::load(
+            &config.classifier.model_dir,
+            config.recognizer.confidence_threshold,
+            config.classifier.max_frames,
+        )?;
+        println!("CNN model loaded from {:?}", config.classifier.model_dir);
+        Some(recognizer)
+    } else {
+        None
+    };
 
     let mut mfcc_extractor =
         MfccExtractor::new(config.audio.sample_rate, &config.dsp, &config.mfcc);
@@ -509,8 +554,12 @@ fn cmd_test(
         let mfcc = mfcc_extractor.extract(&speech_samples);
         let mfcc = apply_feature_transforms(mfcc, config);
 
-        // Recognize.
-        let result = matcher.recognize(&mfcc, &templates);
+        // Recognize using the configured mode.
+        let result = if let Some(ref cnn_recognizer) = cnn {
+            cnn_recognizer.predict(&mfcc)
+        } else {
+            matcher.as_ref().unwrap().recognize(&mfcc, templates.as_ref().unwrap())
+        };
         let elapsed = timer.elapsed();
 
         total_count += 1;
@@ -609,20 +658,35 @@ fn cmd_evaluate(config: &SpeekConfig, wav_dir: Option<PathBuf>) -> Result<()> {
         bail!("No WAV files found in {:?}. Provide test recordings.", test_dir);
     }
 
-    let store = TemplateStore::new(&config.paths.templates_dir)?;
-    let all_templates = store.load_all_templates()?;
+    let use_cnn = config.recognizer.mode == "cnn";
 
-    if all_templates.is_empty() {
-        bail!("{}", SpeekError::NoTemplates);
+    let templates;
+    let matcher;
+    let cnn;
+    if use_cnn {
+        println!("Mode: CNN");
+        let recognizer = CnnRecognizer::load(
+            &config.classifier.model_dir,
+            config.recognizer.confidence_threshold,
+            config.classifier.max_frames,
+        )?;
+        cnn = Some(recognizer);
+        templates = None;
+        matcher = None;
+    } else {
+        let store = TemplateStore::new(&config.paths.templates_dir)?;
+        let all_templates = store.load_all_templates()?;
+        if all_templates.is_empty() {
+            bail!("{}", SpeekError::NoTemplates);
+        }
+        templates = Some(averaging::compute_mean_templates(&all_templates));
+        matcher = Some(TemplateMatcher::new(
+            config.recognizer.sakoe_chiba_width,
+            config.recognizer.confidence_threshold,
+            config.recognizer.max_distance,
+        ));
+        cnn = None;
     }
-
-    let templates = averaging::compute_mean_templates(&all_templates);
-
-    let matcher = TemplateMatcher::new(
-        config.recognizer.sakoe_chiba_width,
-        config.recognizer.confidence_threshold,
-        config.recognizer.max_distance,
-    );
 
     let mut mfcc_extractor =
         MfccExtractor::new(config.audio.sample_rate, &config.dsp, &config.mfcc);
@@ -677,7 +741,11 @@ fn cmd_evaluate(config: &SpeekConfig, wav_dir: Option<PathBuf>) -> Result<()> {
 
             let mfcc = mfcc_extractor.extract(&speech);
             let mfcc = apply_feature_transforms(mfcc, config);
-            let result = matcher.recognize(&mfcc, &templates);
+            let result = if let Some(ref cnn_recognizer) = cnn {
+                cnn_recognizer.predict(&mfcc)
+            } else {
+                matcher.as_ref().unwrap().recognize(&mfcc, templates.as_ref().unwrap())
+            };
 
             total += 1;
             match &result.word {
@@ -1146,29 +1214,47 @@ fn cmd_test_from(config: &SpeekConfig, wav_dir: &PathBuf, verbose: bool) -> Resu
         bail!("Directory {:?} does not exist.", wav_dir);
     }
 
-    // Load trained templates.
-    let store = TemplateStore::new(&config.paths.templates_dir)?;
-    let all_templates = store.load_all_templates()?;
+    let use_cnn = config.recognizer.mode == "cnn";
 
-    if all_templates.is_empty() {
-        bail!("{}", SpeekError::NoTemplates);
+    // Load DTW templates or CNN model.
+    let templates;
+    let matcher;
+    let cnn;
+    if use_cnn {
+        println!("Mode: CNN");
+        let recognizer = CnnRecognizer::load(
+            &config.classifier.model_dir,
+            config.recognizer.confidence_threshold,
+            config.classifier.max_frames,
+        )?;
+        println!("CNN model loaded from {:?}", config.classifier.model_dir);
+        cnn = Some(recognizer);
+        templates = None;
+        matcher = None;
+    } else {
+        let store = TemplateStore::new(&config.paths.templates_dir)?;
+        let all_templates = store.load_all_templates()?;
+        if all_templates.is_empty() {
+            bail!("{}", SpeekError::NoTemplates);
+        }
+        let mean_templates = averaging::compute_mean_templates(&all_templates);
+        let trained_words: Vec<&str> = mean_templates.iter().map(|t| t.word.as_str()).collect();
+        println!("Mode: DTW");
+        println!("Trained words: {}", trained_words.join(", "));
+        println!("Using {} mean templates", mean_templates.len());
+        matcher = Some(TemplateMatcher::new(
+            config.recognizer.sakoe_chiba_width,
+            config.recognizer.confidence_threshold,
+            config.recognizer.max_distance,
+        ));
+        templates = Some(mean_templates);
+        cnn = None;
     }
-
-    let templates = averaging::compute_mean_templates(&all_templates);
-    let trained_words: Vec<&str> = templates.iter().map(|t| t.word.as_str()).collect();
-
-    let matcher = TemplateMatcher::new(
-        config.recognizer.sakoe_chiba_width,
-        config.recognizer.confidence_threshold,
-        config.recognizer.max_distance,
-    );
 
     let mut mfcc_extractor =
         MfccExtractor::new(config.audio.sample_rate, &config.dsp, &config.mfcc);
 
     println!("Test suite from: {:?}", wav_dir);
-    println!("Trained words: {}", trained_words.join(", "));
-    println!("Using {} mean templates", templates.len());
     println!();
 
     // Discover test WAVs.
@@ -1253,7 +1339,11 @@ fn cmd_test_from(config: &SpeekConfig, wav_dir: &PathBuf, verbose: bool) -> Resu
 
             let mfcc = mfcc_extractor.extract(&speech);
             let mfcc = apply_feature_transforms(mfcc, config);
-            let result = matcher.recognize(&mfcc, &templates);
+            let result = if let Some(ref cnn_recognizer) = cnn {
+                cnn_recognizer.predict(&mfcc)
+            } else {
+                matcher.as_ref().unwrap().recognize(&mfcc, templates.as_ref().unwrap())
+            };
 
             word_confidences.push(result.confidence);
 
@@ -1338,6 +1428,99 @@ fn cmd_test_from(config: &SpeekConfig, wav_dir: &PathBuf, verbose: bool) -> Resu
         "Overall accuracy: {}/{} = {:.1}%",
         total_correct, grand_total, accuracy
     );
+
+    Ok(())
+}
+
+/// Process a single WAV file through the feature pipeline.
+/// Returns None if no speech detected.
+fn process_wav_to_mfcc(
+    wav_path: &std::path::Path,
+    config: &SpeekConfig,
+    mfcc_extractor: &mut MfccExtractor,
+) -> Result<Option<MfccSequence>> {
+    let (mut samples, _sr) = wav::load_wav(wav_path)?;
+    preprocess::preprocess(&mut samples, config.dsp.pre_emphasis);
+
+    let frame_length = config.frame_length_samples();
+    let frame_step = config.frame_step_samples();
+    let trimmed = energy_vad::trim_silence(
+        &samples,
+        config.audio.sample_rate,
+        frame_length,
+        frame_step,
+        &config.vad,
+    );
+
+    match trimmed {
+        Some(speech) => {
+            let mfcc = mfcc_extractor.extract(&speech);
+            let mfcc = apply_feature_transforms(mfcc, config);
+            Ok(Some(mfcc))
+        }
+        None => Ok(None),
+    }
+}
+
+fn cmd_cnn_train(
+    config: &SpeekConfig,
+    wav_dir: &PathBuf,
+    epochs_override: Option<usize>,
+    batch_size_override: Option<usize>,
+    lr_override: Option<f64>,
+) -> Result<()> {
+    if !wav_dir.exists() {
+        bail!("Directory {:?} does not exist.", wav_dir);
+    }
+
+    let epochs = epochs_override.unwrap_or(config.classifier.epochs);
+    let batch_size = batch_size_override.unwrap_or(config.classifier.batch_size);
+    let learning_rate = lr_override.unwrap_or(config.classifier.learning_rate);
+    let max_frames = config.classifier.max_frames;
+    let model_dir = &config.classifier.model_dir;
+
+    // Load samples using shared MFCC pipeline.
+    let mut mfcc_extractor =
+        MfccExtractor::new(config.audio.sample_rate, &config.dsp, &config.mfcc);
+
+    println!("Loading WAV files from {:?}...", wav_dir);
+    let (samples, vocab) = cnn_dataset::load_samples_from_dir(wav_dir, |path| {
+        process_wav_to_mfcc(path, config, &mut mfcc_extractor)
+    })?;
+
+    if samples.len() < 2 {
+        bail!("Need at least 2 samples to train. Found {}.", samples.len());
+    }
+
+    // Split into train/val.
+    let (train_samples, val_samples) =
+        cnn_dataset::train_val_split(&samples, config.classifier.validation_split);
+
+    // Save vocabulary mapping.
+    std::fs::create_dir_all(model_dir)?;
+    let vocab_path = model_dir.join("cnn_vocab.json");
+    vocab.save(&vocab_path)?;
+    println!("Vocabulary saved to {:?}", vocab_path);
+    println!();
+
+    // Train.
+    cnn_training::train_cnn(
+        &train_samples,
+        &val_samples,
+        &vocab,
+        max_frames,
+        epochs,
+        batch_size,
+        learning_rate,
+        config.classifier.early_stopping_patience,
+        model_dir,
+        4, // num_augments per sample
+    )?;
+
+    println!();
+    println!("To use CNN for recognition, set in speeko.toml:");
+    println!("  [recognizer]");
+    println!("  mode = \"cnn\"");
 
     Ok(())
 }

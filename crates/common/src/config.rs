@@ -10,6 +10,8 @@ pub struct SpeekConfig {
     pub mfcc: MfccConfig,
     pub recognizer: RecognizerConfig,
     pub paths: PathsConfig,
+    #[serde(default)]
+    pub classifier: ClassifierConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +76,9 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecognizerConfig {
+    /// Recognition mode: "dtw" or "cnn".
+    #[serde(default = "default_mode")]
+    pub mode: String,
     /// Confidence threshold for rejection (0.0 to 1.0).
     pub confidence_threshold: f32,
     /// Maximum acceptable DTW distance before absolute rejection.
@@ -85,6 +90,57 @@ pub struct RecognizerConfig {
     /// Recommended number of training samples per word.
     pub recommended_samples_per_word: usize,
 }
+
+fn default_mode() -> String {
+    "dtw".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassifierConfig {
+    /// Fixed number of MFCC frames for CNN input (pad/truncate to this).
+    #[serde(default = "default_max_frames")]
+    pub max_frames: usize,
+    /// Directory for CNN model files.
+    #[serde(default = "default_model_dir")]
+    pub model_dir: PathBuf,
+    /// Number of training epochs.
+    #[serde(default = "default_epochs")]
+    pub epochs: usize,
+    /// Training batch size.
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+    /// Learning rate.
+    #[serde(default = "default_learning_rate")]
+    pub learning_rate: f64,
+    /// Fraction of data for validation.
+    #[serde(default = "default_validation_split")]
+    pub validation_split: f64,
+    /// Early stopping patience (epochs).
+    #[serde(default = "default_patience")]
+    pub early_stopping_patience: usize,
+}
+
+impl Default for ClassifierConfig {
+    fn default() -> Self {
+        Self {
+            max_frames: default_max_frames(),
+            model_dir: default_model_dir(),
+            epochs: default_epochs(),
+            batch_size: default_batch_size(),
+            learning_rate: default_learning_rate(),
+            validation_split: default_validation_split(),
+            early_stopping_patience: default_patience(),
+        }
+    }
+}
+
+fn default_max_frames() -> usize { 100 }
+fn default_model_dir() -> PathBuf { PathBuf::from("data/models") }
+fn default_epochs() -> usize { 50 }
+fn default_batch_size() -> usize { 16 }
+fn default_learning_rate() -> f64 { 0.001 }
+fn default_validation_split() -> f64 { 0.2 }
+fn default_patience() -> usize { 10 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathsConfig {
@@ -127,12 +183,14 @@ impl Default for SpeekConfig {
                 use_cmn: true,
             },
             recognizer: RecognizerConfig {
+                mode: "dtw".to_string(),
                 confidence_threshold: 0.3,
                 max_distance: 40.0,
                 sakoe_chiba_width: 0.2,
                 min_samples_per_word: 3,
                 recommended_samples_per_word: 5,
             },
+            classifier: ClassifierConfig::default(),
             paths: PathsConfig {
                 templates_dir: PathBuf::from("data/templates"),
                 recordings_dir: PathBuf::from("data/recordings"),

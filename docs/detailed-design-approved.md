@@ -42,7 +42,7 @@ Edge and embedded devices often need voice command recognition but cannot rely o
 | FR-2 | Train/enroll words: record N samples per word, extract features, store templates |
 | FR-3 | Inference: capture mic input, extract features, match against templates, return predicted word + confidence |
 | FR-4 | Reject unknown/low-confidence input |
-| FR-5 | CLI commands: `train <word>`, `test`, `list-words`, `evaluate` |
+| FR-5 | CLI commands: `train <word>`, `record-samples`, `train-from`, `test`, `test-from`, `list-words`, `evaluate` |
 | FR-6 | Configurable vocabulary list |
 | FR-7 | Persist training data and templates to disk |
 | FR-8 | Support ≥10 words, ≥3 samples per word |
@@ -128,7 +128,8 @@ Edge and embedded devices often need voice command recognition but cannot rely o
 ```
 ┌─────────────────────────────────────────────────────┐
 │                      CLI (app-cli)                   │
-│   train <word> | test | list-words | evaluate        │
+│   train <word> | record-samples | train-from        │
+│   test | test-from | list-words | evaluate          │
 └──────────┬──────────────────────────────┬────────────┘
            │                              │
     ┌──────▼──────┐              ┌────────▼────────┐
@@ -155,8 +156,8 @@ Edge and embedded devices often need voice command recognition but cannot rely o
     ┌──────────────────▼───────────────────────────┐
     │       Feature Extraction (features)           │
     │   Framing → Hamming window → FFT →            │
-    │   Mel filterbank → Log → DCT → 13 MFCCs      │
-    │   + optional delta coefficients               │
+    │   Mel filterbank → Log → DCT → MFCCs           │
+    │   + CMN + delta + delta-delta coefficients     │
     └──────────────────┬───────────────────────────┘
                        │
            ┌───────────┴───────────┐
@@ -176,8 +177,9 @@ Edge and embedded devices often need voice command recognition but cannot rely o
 | **audio** | Mic capture via `cpal`, produces PCM i16 buffers |
 | **dsp** | Pre-emphasis, DC removal, amplitude normalization, framing, windowing |
 | **vad** | Energy-based VAD, utterance endpoint detection |
-| **features** | FFT (rustfft), mel filterbank, log energy, DCT → MFCC vectors |
-| **recognizer** | DTW distance computation, multi-template matching, confidence scoring, rejection |
+| **features** | FFT (rustfft), mel filterbank, log energy, DCT → MFCC vectors, CMN, delta/delta-delta |
+| **recognizer** | DTW distance computation, mean-template matching, confidence scoring, rejection |
+| **classifier** | CNN model definition, dataset loading, data augmentation, training loop, inference (burn 0.20) |
 | **store** | Serialize/deserialize templates and raw audio (WAV), vocabulary config |
 | **common** | Shared types, error types, config structures |
 
@@ -225,13 +227,15 @@ speeko/
 │   │       ├── lib.rs
 │   │       ├── mel.rs          # Mel filterbank
 │   │       ├── mfcc.rs         # MFCC extraction pipeline
+│   │       ├── cmn.rs          # Cepstral mean normalization
 │   │       └── delta.rs        # Delta/delta-delta coefficients
 │   ├── recognizer/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── dtw.rs          # DTW algorithm
-│   │       ├── matcher.rs      # Multi-template matching + scoring
+│   │       ├── averaging.rs    # Mean template computation
+│   │       ├── matcher.rs      # Template matching + scoring
 │   │       └── confidence.rs   # Confidence computation + rejection
 │   ├── store/
 │   │   ├── Cargo.toml
@@ -239,6 +243,15 @@ speeko/
 │   │       ├── lib.rs
 │   │       ├── templates.rs    # Template persistence (bincode/JSON)
 │   │       └── vocabulary.rs   # Vocabulary config loading
+│   ├── classifier/
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── model.rs         # CNN model definition (KeywordCnn)
+│   │       ├── dataset.rs       # Dataset loading, vocab mapping, train/val split
+│   │       ├── augment.rs       # Data augmentation (time stretch, noise, shift, freq mask)
+│   │       ├── training.rs      # Training loop, optimizer, early stopping
+│   │       └── inference.rs     # CnnRecognizer for prediction
 │   └── common/
 │       ├── Cargo.toml
 │       └── src/
@@ -248,7 +261,7 @@ speeko/
 │           └── config.rs       # Config structs + defaults
 ├── data/                       # Runtime data directory (gitignored)
 │   ├── templates/              # Saved per-word templates
-│   └── recordings/             # Raw WAV recordings
+│   └── recordings/             # Raw WAV recordings (train/test sets)
 ├── tests/
 │   ├── integration/
 │   │   └── pipeline_test.rs
@@ -289,6 +302,8 @@ No speech recognition crates. All DSP (MFCC, mel filterbank, DCT, DTW) implement
 | `log` | `0.4` | Logging facade |
 | `env_logger` | `0.11` | Concrete logger for CLI; configurable via `RUST_LOG` |
 | `ctrlc` | `3.4` | Ctrl+C signal handling for graceful shutdown |
+| `burn` | `0.20` | CNN backend: tensor ops, autodiff, ndarray backend, training utilities |
+| `rand` | `0.8` | Data augmentation random number generation |
 
 All versions pinned with `~` (compatible) in Cargo.toml to avoid unexpected breakage. `Cargo.lock` committed to repo since this is an application.
 
@@ -320,12 +335,12 @@ All versions pinned with `~` (compatible) in Cargo.toml to avoid unexpected brea
 
 ### 6.4 Voice Activity Detection (VAD)
 - **Energy-based**: compute short-time energy per frame
-- **Zero-crossing rate (ZCR)**: secondary feature for unvoiced detection
 - **Algorithm**:
-  1. Compute energy of first 10 frames (assumed silence) → silence threshold = mean + 2σ
-  2. Mark frames above threshold as active
-  3. Apply minimum utterance duration (200ms) and hangover (100ms)
-  4. Trim to active region with small padding (50ms each side)
+  1. Estimate silence energy from the lowest 20% of frame energies (skip first 3 frames)
+  2. Silence threshold = max(min_floor, silence_energy * threshold_factor)
+  3. Mark frames above threshold as active
+  4. Apply minimum utterance duration (200ms) and hangover (100ms)
+  5. Cap max utterance length and center on peak energy region
 
 ### 6.5 Feature Extraction (MFCC)
 Per frame:
@@ -336,66 +351,136 @@ Per frame:
    - Mel scale: `mel(f) = 2595 * log10(1 + f/700)`
 5. Take log of filterbank energies
 6. Apply **DCT** to get 13 MFCC coefficients (keep coefficients 1–13, discard 0th)
-7. *Optional (v2)*: compute delta and delta-delta coefficients
+7. **CMN**: subtract per-utterance mean from each coefficient
+8. **Δ + ΔΔ**: append delta and delta-delta coefficients
 
-**Output**: Each utterance → matrix of shape `[num_frames × 13]`
+**Output**: Each utterance → matrix of shape `[num_frames × 39]`
 
 ### 6.6 DTW Template Matching
-- **Distance metric**: Euclidean distance between MFCC vectors
+- **Distance metric**: Weighted Euclidean distance (lower MFCC coefficients weighted more)
 - **DTW algorithm**: Standard dynamic programming
   - Cost matrix `D[i][j] = dist(query[i], template[j]) + min(D[i-1][j], D[i][j-1], D[i-1][j-1])`
   - Sakoe-Chiba band constraint (width = 20% of max length) to limit warping and speed up
-- **Multi-template**: Store K templates per word (K=3–5), compute DTW to each, take minimum distance
-- **Score**: `score(word) = min(dtw_distance to each template of that word)`
+- **Mean-template matching**: Compute a mean template per word by interpolating templates to the
+  median length and averaging. One DTW per word.
+- **Score**: `score(word) = dtw_distance(query, mean_template[word])`
 - **Prediction**: word with lowest score
 
 ### 6.7 Confidence & Rejection
-- **Confidence formula**: `confidence = 1.0 - (best_score / second_best_score)`
-  - High confidence → best match is much better than second best
-- **Rejection threshold**: configurable, default 0.3
+- **Relative confidence**: log-ratio of best vs second-best distances
+  - `relative = ln(second/best) / ln(2)` (clamped to [0,1])
+- **Absolute confidence**: `absolute = 1.0 - (best_score / max_distance)`
+- **Blend**: `confidence = 0.3 * relative + 0.7 * absolute`
+- **Rejection threshold**: configurable, default 0.2
   - If `confidence < threshold` → return "unknown"
-- **Absolute distance check**: if `best_score > max_acceptable_distance` → reject regardless
+- **Absolute distance check**: if `best_score > max_distance` → reject regardless
   - Guards against all words being poor matches
+
+### 6.8 CNN Classifier (Alternative Backend)
+
+An optional 1D CNN classifier is available as an alternative to DTW, implemented in the `classifier` crate using the [burn](https://burn.dev) crate (v0.20).
+
+**Architecture** (`KeywordCnn`):
+- Input: `[batch, 39, max_frames]` — padded/truncated MFCC sequences
+- 3× Conv1d blocks: Conv1d → BatchNorm → ReLU → MaxPool1d
+  - Channels: 39→64→128→256, kernel=3, padding=1, pool=2
+- AdaptiveAvgPool1d → flatten
+- FC1: 256→128 + ReLU + Dropout(0.3)
+- FC2: 128→num_classes (softmax output)
+
+**Data Augmentation** (applied during training):
+- **Time stretch**: resample MFCC frames by random factor 0.8–1.2
+- **Gaussian noise**: add N(0, 0.005) noise to coefficients
+- **Time shift**: circular shift by ±5 frames
+- **Frequency masking**: zero out 1–3 random coefficient bands
+
+**Training**:
+- Optimizer: Adam (lr=0.001 default)
+- Loss: cross-entropy
+- Early stopping: patience=10 epochs on validation accuracy
+- Model saved as burn record + vocabulary JSON in `data/models/`
+
+**Inference**:
+- Load model + vocabulary from disk
+- Pad/truncate query MFCC to `max_frames`
+- Forward pass → softmax → argmax → word prediction
+- Confidence = max softmax probability
+- Returns `RecognitionResult` (same type as DTW)
+
+**Mode switching**: Set `recognizer.mode = "cnn"` in `speeko.toml`. The `test`, `test-from`, and `evaluate` commands automatically dispatch to the CNN recognizer.
 
 ---
 
 ## 7. Data Flow
 
-### 7.1 Training Flow
+### 7.1 Training Flow (Direct Mic)
 ```
 User says: speeko train "start"
   → CLI prompts "Say 'start' now..."
   → Audio capture: 3s recording @ 16kHz mono
   → Preprocessing: DC removal → pre-emphasis → normalize
   → VAD: detect utterance boundaries → trim
-  → Feature extraction: framing → FFT → mel → MFCC → [F×13] matrix
+  → Feature extraction: framing → FFT → mel → MFCC → CMN → Δ/ΔΔ → [F×39]
   → Save: raw WAV → data/recordings/start/sample_003.wav
   → Save: MFCC template → data/templates/start/template_003.bin
   → Repeat for N samples
   → Print summary: "Trained 'start' with 5 samples"
 ```
 
-### 7.2 Inference Flow
+### 7.2 Training Flow (Batch WAV Workflow)
+```
+User says: speeko record-samples start stop yes no --samples 5 -o data/train_wavs
+  → Record WAVs for all words into data/train_wavs/<word>/sample_###.wav
+  → User reviews WAVs and deletes mis-pronounced recordings
+User says: speeko train-from data/train_wavs --reset
+  → Loads WAVs, preprocess + VAD + MFCC + CMN + Δ/ΔΔ
+  → Saves templates per word
+```
+
+### 7.3 Inference Flow (Live Mic)
 ```
 User says: speeko test
   → CLI prompts "Listening..."
   → Audio capture: continuous 3s sliding window
   → Preprocessing: DC removal → pre-emphasis → normalize
   → VAD: detect utterance → trim
-  → Feature extraction: → [F×13] MFCC matrix
-  → Recognizer: DTW against all templates for all words
+  → Feature extraction: → [F×39] matrix (MFCC + CMN + Δ/ΔΔ)
+  → Recognizer: DTW against mean template per word
   → Scoring: pick best word, compute confidence
   → Confidence check: above threshold? → "Recognized: start (92%)"
                        below threshold? → "Unknown word (confidence too low)"
 ```
 
-### 7.3 Unknown-Word Rejection Flow
+### 7.4 Unknown-Word Rejection Flow
 ```
   → DTW scores: {start: 45.2, stop: 47.8, open: 89.1, ...}
   → Best: start (45.2), Second-best: stop (47.8)
-  → Confidence = 1 - 45.2/47.8 = 0.054 → LOW
-  → Also check: 45.2 > max_acceptable_distance (40.0)? → YES
+  → Confidence = 0.3*ln(47.8/45.2)/ln(2) + 0.7*(1 - 45.2/80.0) → LOW
+  → Also check: 45.2 > max_distance (80.0)? → NO
   → Result: "Unknown" — neither margin nor absolute distance is acceptable
+```
+
+### 7.5 CNN Training Flow
+```
+User says: speeko cnn-train data/train_wavs --epochs 50
+  → Load WAVs from data/train_wavs/<word>/sample_*.wav
+  → Preprocess + VAD + MFCC + CMN + Δ/ΔΔ per file
+  → Build vocabulary map (word → class index)
+  → Split into train/validation sets (80/20)
+  → Augment training data (time stretch, noise, shift, freq mask)
+  → Pad/truncate all samples to max_frames
+  → Train KeywordCnn with Adam optimizer + cross-entropy loss
+  → Early stopping on validation accuracy (patience=10)
+  → Save model record + vocabulary JSON to data/models/
+```
+
+### 7.6 Offline Test Suite (Pre-recorded WAVs)
+```
+User says: speeko test-from data/test_wavs --verbose
+  → Load WAVs from data/test_wavs/<word>/sample_###.wav
+  → Preprocess + VAD + MFCC + CMN + Δ/ΔΔ
+  → Recognize using mean templates
+  → Report per-word accuracy table + average confidence
 ```
 
 ---

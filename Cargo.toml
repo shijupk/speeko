@@ -8,6 +8,7 @@ members = [
     "crates/recognizer",
     "crates/store",
     "crates/app-cli",
+    "crates/classifier",
 ]
 resolver = "2"
 
