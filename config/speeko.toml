@@ -25,10 +25,12 @@ num_mel_filters = 26
 num_coefficients = 13
 low_freq = 0.0
 high_freq = 8000.0
+use_deltas = true
+use_cmn = true
 
 [recognizer]
 confidence_threshold = 0.2
-max_distance = 40.0
+max_distance = 80.0
 sakoe_chiba_width = 0.2
 min_samples_per_word = 3
 recommended_samples_per_word = 5

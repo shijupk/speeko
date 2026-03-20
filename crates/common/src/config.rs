@@ -60,6 +60,16 @@ pub struct MfccConfig {
     pub low_freq: f32,
     /// Upper frequency bound in Hz.
     pub high_freq: f32,
+    /// Append delta and delta-delta coefficients (13 → 39 dims).
+    #[serde(default = "default_true")]
+    pub use_deltas: bool,
+    /// Apply Cepstral Mean Normalization per utterance.
+    #[serde(default = "default_true")]
+    pub use_cmn: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +123,8 @@ impl Default for SpeekConfig {
                 num_coefficients: 13,
                 low_freq: 0.0,
                 high_freq: 8000.0,
+                use_deltas: true,
+                use_cmn: true,
             },
             recognizer: RecognizerConfig {
                 confidence_threshold: 0.3,

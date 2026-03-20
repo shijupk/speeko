@@ -1,11 +1,20 @@
 use speeko_common::types::MfccSequence;
 
-/// Compute Euclidean distance between two MFCC feature vectors.
+/// Compute weighted Euclidean distance between two feature vectors.
+///
+/// Lower-order coefficients receive higher weight since they carry more
+/// spectral shape information. Weight decays as `1 / (1 + 0.1 * i)` within
+/// each group of 13 coefficients (MFCC, delta, delta-delta).
 fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     a.iter()
         .zip(b.iter())
-        .map(|(&x, &y)| (x - y).powi(2))
+        .enumerate()
+        .map(|(i, (&x, &y))| {
+            let idx_in_group = i % 13;
+            let w = 1.0 / (1.0 + 0.1 * idx_in_group as f32);
+            w * (x - y).powi(2)
+        })
         .sum::<f32>()
         .sqrt()
 }

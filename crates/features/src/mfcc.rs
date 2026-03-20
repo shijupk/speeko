@@ -144,6 +144,8 @@ mod tests {
             num_coefficients: 13,
             low_freq: 0.0,
             high_freq: 8000.0,
+            use_deltas: false,
+            use_cmn: false,
         };
         (dsp, mfcc)
     }

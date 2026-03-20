@@ -43,6 +43,24 @@ pub fn append_deltas(mfcc_sequence: &MfccSequence) -> MfccSequence {
         .collect()
 }
 
+/// Append delta and delta-delta (acceleration) coefficients to each MFCC frame,
+/// tripling the feature dimension: [MFCC | Δ | ΔΔ].
+pub fn append_deltas_and_double_deltas(mfcc_sequence: &MfccSequence) -> MfccSequence {
+    let deltas = compute_deltas(mfcc_sequence);
+    let double_deltas = compute_deltas(&deltas);
+    mfcc_sequence
+        .iter()
+        .zip(deltas.iter())
+        .zip(double_deltas.iter())
+        .map(|((mfcc, delta), ddelta)| {
+            let mut combined = mfcc.clone();
+            combined.extend_from_slice(delta);
+            combined.extend_from_slice(ddelta);
+            combined
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,5 +103,18 @@ mod tests {
         let combined = append_deltas(&mfcc);
         assert_eq!(combined.len(), 3);
         assert_eq!(combined[0].len(), 4); // 2 MFCC + 2 delta
+    }
+
+    #[test]
+    fn test_append_deltas_and_double_deltas() {
+        let mfcc: MfccSequence = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![2.0, 3.0, 4.0],
+            vec![3.0, 4.0, 5.0],
+            vec![4.0, 5.0, 6.0],
+        ];
+        let combined = append_deltas_and_double_deltas(&mfcc);
+        assert_eq!(combined.len(), 4);
+        assert_eq!(combined[0].len(), 9); // 3 MFCC + 3 delta + 3 delta-delta
     }
 }

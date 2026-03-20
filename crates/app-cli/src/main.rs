@@ -12,7 +12,11 @@ use speeko_common::config::SpeekConfig;
 use speeko_common::error::SpeekError;
 use speeko_common::types::Template;
 use speeko_dsp::preprocess;
+use speeko_common::types::MfccSequence;
+use speeko_features::cmn;
+use speeko_features::delta;
 use speeko_features::mfcc::MfccExtractor;
+use speeko_recognizer::averaging;
 use speeko_recognizer::matcher::TemplateMatcher;
 use speeko_store::templates::TemplateStore;
 use speeko_store::vocabulary;
@@ -164,6 +168,26 @@ fn main() -> Result<()> {
     }
 }
 
+/// Apply post-extraction feature transforms: CMN and/or delta+delta-delta.
+fn apply_feature_transforms(mfcc: MfccSequence, config: &SpeekConfig) -> MfccSequence {
+    let mut features = mfcc;
+
+    if config.mfcc.use_cmn {
+        features = cmn::normalize(&features);
+        log::debug!("Applied CMN normalization");
+    }
+
+    if config.mfcc.use_deltas {
+        features = delta::append_deltas_and_double_deltas(&features);
+        log::debug!(
+            "Applied delta+delta-delta: {} dims per frame",
+            features.first().map_or(0, |f| f.len())
+        );
+    }
+
+    features
+}
+
 fn cmd_train(
     config: &SpeekConfig,
     word: &str,
@@ -294,9 +318,10 @@ fn cmd_train(
         let wav_path = recordings_dir.join(format!("sample_{:03}.wav", sample_index));
         wav::save_wav(&wav_path, &speech_samples, config.audio.sample_rate)?;
 
-        // Extract MFCC features.
+        // Extract MFCC features + apply transforms (CMN, deltas).
         let timer = Instant::now();
         let mfcc = mfcc_extractor.extract(&speech_samples);
+        let mfcc = apply_feature_transforms(mfcc, config);
         log::debug!("  MFCC extraction took {:?}", timer.elapsed());
 
         // Save template.
@@ -332,17 +357,21 @@ fn cmd_test(
     cancel: &Arc<AtomicBool>,
 ) -> Result<()> {
     let store = TemplateStore::new(&config.paths.templates_dir)?;
-    let templates = store.load_all_templates()?;
+    let all_templates = store.load_all_templates()?;
 
-    if templates.is_empty() {
+    if all_templates.is_empty() {
         bail!("{}", SpeekError::NoTemplates);
     }
+
+    // Compute mean templates for matching (reduces noise from individual recordings).
+    let templates = averaging::compute_mean_templates(&all_templates);
+    log::info!("Using {} mean templates for matching", templates.len());
 
     // Report trained words.
     let counts = store.template_counts()?;
     println!("Loaded templates for {} words:", counts.len());
     for (word, count) in &counts {
-        println!("  {} ({} samples)", word, count);
+        println!("  {} ({} samples -> 1 mean template)", word, count);
     }
 
     if config.paths.vocabulary_file.exists() {
@@ -432,8 +461,9 @@ fn cmd_test(
             }
         };
 
-        // Extract MFCC.
+        // Extract MFCC + apply transforms (CMN, deltas).
         let mfcc = mfcc_extractor.extract(&speech_samples);
+        let mfcc = apply_feature_transforms(mfcc, config);
 
         // Recognize.
         let result = matcher.recognize(&mfcc, &templates);
@@ -536,11 +566,13 @@ fn cmd_evaluate(config: &SpeekConfig, wav_dir: Option<PathBuf>) -> Result<()> {
     }
 
     let store = TemplateStore::new(&config.paths.templates_dir)?;
-    let templates = store.load_all_templates()?;
+    let all_templates = store.load_all_templates()?;
 
-    if templates.is_empty() {
+    if all_templates.is_empty() {
         bail!("{}", SpeekError::NoTemplates);
     }
+
+    let templates = averaging::compute_mean_templates(&all_templates);
 
     let matcher = TemplateMatcher::new(
         config.recognizer.sakoe_chiba_width,
@@ -600,6 +632,7 @@ fn cmd_evaluate(config: &SpeekConfig, wav_dir: Option<PathBuf>) -> Result<()> {
             };
 
             let mfcc = mfcc_extractor.extract(&speech);
+            let mfcc = apply_feature_transforms(mfcc, config);
             let result = matcher.recognize(&mfcc, &templates);
 
             total += 1;
@@ -711,19 +744,21 @@ fn cmd_extract(config: &SpeekConfig, wav_path: &PathBuf, dump: bool) -> Result<(
 
     let timer = Instant::now();
     let mfcc = mfcc_extractor.extract(&samples);
+    let mfcc = apply_feature_transforms(mfcc, config);
     let elapsed = timer.elapsed();
 
+    let dims = mfcc.first().map_or(0, |f| f.len());
     println!(
-        "MFCC: [{} x {}] extracted in {:?}",
+        "Features: [{} x {}] extracted in {:?}",
         mfcc.len(),
-        config.mfcc.num_coefficients,
+        dims,
         elapsed
     );
 
     if dump {
         println!();
         println!("Frame | Coefficients");
-        println!("------+{}", "-".repeat(config.mfcc.num_coefficients * 10));
+        println!("------+{}", "-".repeat(dims * 10));
         for (i, frame) in mfcc.iter().enumerate() {
             let vals: Vec<String> = frame.iter().map(|v| format!("{:8.3}", v)).collect();
             println!("{:5} | {}", i, vals.join(" "));
