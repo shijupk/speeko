@@ -111,6 +111,42 @@ enum Commands {
         #[arg(long)]
         confirm: bool,
     },
+    /// Pre-record WAV samples for one or more words (review/delete before training).
+    RecordSamples {
+        /// Words to record samples for (e.g. start stop yes no).
+        words: Vec<String>,
+        /// Number of samples per word.
+        #[arg(long, default_value_t = 5)]
+        samples: usize,
+        /// Recording duration per sample in seconds.
+        #[arg(long)]
+        duration: Option<f32>,
+        /// Output directory for WAV files (default: data/recordings).
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
+    /// Train templates from a folder of pre-recorded WAV files.
+    ///
+    /// Folder structure: <dir>/<word>/sample_000.wav, sample_001.wav, ...
+    /// Delete any bad recordings before running this command.
+    TrainFrom {
+        /// Directory containing word subfolders with WAV files.
+        dir: PathBuf,
+        /// Reset existing templates before training.
+        #[arg(long)]
+        reset: bool,
+    },
+    /// Run recognition test suite from pre-recorded WAV files.
+    ///
+    /// Folder structure: <dir>/<word>/sample_000.wav, ...
+    /// Reports per-word and overall accuracy.
+    TestFrom {
+        /// Directory containing word subfolders with WAV files.
+        dir: PathBuf,
+        /// Show per-file details.
+        #[arg(long)]
+        verbose: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -165,6 +201,14 @@ fn main() -> Result<()> {
             all,
             confirm,
         } => cmd_reset(&config, word, all, confirm),
+        Commands::RecordSamples {
+            words,
+            samples,
+            duration,
+            output,
+        } => cmd_record_samples(&config, &words, samples, duration, output, &cancel),
+        Commands::TrainFrom { dir, reset } => cmd_train_from(&config, &dir, reset),
+        Commands::TestFrom { dir, verbose } => cmd_test_from(&config, &dir, verbose),
     }
 }
 
@@ -834,6 +878,466 @@ fn cmd_diagnose(config: &SpeekConfig) -> Result<()> {
     } else {
         println!("  (no vocabulary file found)");
     }
+
+    Ok(())
+}
+
+fn cmd_record_samples(
+    config: &SpeekConfig,
+    words: &[String],
+    num_samples: usize,
+    duration_override: Option<f32>,
+    output_dir: Option<PathBuf>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<()> {
+    if words.is_empty() {
+        bail!("Provide at least one word to record. Example: speeko record-samples start stop yes no");
+    }
+
+    let duration = duration_override.unwrap_or(config.audio.record_duration_secs);
+    let base_dir = output_dir.unwrap_or_else(|| config.paths.recordings_dir.clone());
+
+    let total_recordings = words.len() * num_samples;
+    println!("Recording plan:");
+    println!("  Words: {}", words.iter().map(|w| w.to_lowercase()).collect::<Vec<_>>().join(", "));
+    println!("  Samples per word: {}", num_samples);
+    println!("  Duration per sample: {:.1}s", duration);
+    println!("  Output directory: {:?}", base_dir);
+    println!("  Total recordings: {}", total_recordings);
+    println!();
+    println!("Recordings are saved as WAV files. After recording, review them and");
+    println!("delete any mis-pronounced ones before running `speeko train-from`.");
+    println!();
+
+    for word in words {
+        let word = word.to_lowercase();
+        let word_dir = base_dir.join(&word);
+        std::fs::create_dir_all(&word_dir)?;
+
+        // Find next available index in this folder.
+        let existing_count = std::fs::read_dir(&word_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "wav"))
+            .count();
+
+        println!("=== Recording '{}' ({} existing WAVs in folder) ===", word, existing_count);
+        println!();
+
+        for i in 0..num_samples {
+            if cancel.load(Ordering::Relaxed) {
+                println!("\nRecording cancelled.");
+                return Ok(());
+            }
+
+            let file_index = existing_count + i;
+            println!(
+                "[{}/{}] Say '{}' now... (press Enter when ready, 's' to skip word)",
+                i + 1,
+                num_samples,
+                word
+            );
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            if input.trim().eq_ignore_ascii_case("s") {
+                println!("  Skipping remaining samples for '{}'.", word);
+                break;
+            }
+
+            if cancel.load(Ordering::Relaxed) {
+                println!("\nRecording cancelled.");
+                return Ok(());
+            }
+
+            println!("  Recording in 1s...");
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            println!("  Recording...");
+
+            let samples = match capture::record_audio(config.audio.sample_rate, duration, cancel) {
+                Ok(s) => s,
+                Err(e) => {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
+                    eprintln!("  Audio capture error: {}. Skipping.", e);
+                    continue;
+                }
+            };
+
+            if capture::is_clipped(&samples, 0.99) {
+                eprintln!("  WARNING: Audio appears clipped.");
+            }
+
+            let wav_path = word_dir.join(format!("sample_{:03}.wav", file_index));
+            wav::save_wav(&wav_path, &samples, config.audio.sample_rate)?;
+
+            let duration_ms = samples.len() as f32 / config.audio.sample_rate as f32 * 1000.0;
+            println!("  ✓ Saved {:?} ({:.0}ms)", wav_path.file_name().unwrap_or_default(), duration_ms);
+        }
+        println!();
+    }
+
+    println!("Recording complete! Files saved to {:?}", base_dir);
+    println!();
+    println!("Next steps:");
+    println!("  1. Review the WAV files (play them back, delete bad ones)");
+    println!("  2. Run: speeko train-from {:?}", base_dir);
+    println!("  3. Test: speeko test-from <test_wav_dir>");
+    Ok(())
+}
+
+fn cmd_train_from(config: &SpeekConfig, wav_dir: &PathBuf, reset: bool) -> Result<()> {
+    if !wav_dir.exists() {
+        bail!("Directory {:?} does not exist.", wav_dir);
+    }
+
+    // Discover words (subdirectories) and WAV files.
+    let mut word_files: Vec<(String, Vec<PathBuf>)> = Vec::new();
+    let entries = std::fs::read_dir(wav_dir)
+        .with_context(|| format!("Failed to read directory {:?}", wav_dir))?;
+
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let word = entry
+            .file_name()
+            .to_str()
+            .unwrap_or("")
+            .to_lowercase();
+        if word.is_empty() {
+            continue;
+        }
+
+        let mut wavs: Vec<PathBuf> = std::fs::read_dir(entry.path())?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().map_or(false, |ext| ext == "wav"))
+            .collect();
+        wavs.sort();
+
+        if !wavs.is_empty() {
+            word_files.push((word, wavs));
+        }
+    }
+    word_files.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if word_files.is_empty() {
+        bail!(
+            "No word folders with WAV files found in {:?}.\n\
+             Expected structure: <dir>/<word>/sample_000.wav",
+            wav_dir
+        );
+    }
+
+    // Summary.
+    let total_wavs: usize = word_files.iter().map(|(_, files)| files.len()).sum();
+    println!("Training from pre-recorded WAVs:");
+    println!("  Source: {:?}", wav_dir);
+    for (word, files) in &word_files {
+        println!("  {} — {} WAV files", word, files.len());
+    }
+    println!("  Total: {} files across {} words", total_wavs, word_files.len());
+    println!();
+
+    let store = TemplateStore::new(&config.paths.templates_dir)?;
+
+    if reset {
+        store.delete_all()?;
+        println!("Cleared existing templates.");
+    }
+
+    let mut mfcc_extractor =
+        MfccExtractor::new(config.audio.sample_rate, &config.dsp, &config.mfcc);
+
+    let mut trained = 0usize;
+    let mut skipped = 0usize;
+
+    for (word, files) in &word_files {
+        println!("Training '{}'...", word);
+
+        let start_index = if reset {
+            0
+        } else {
+            store.next_sample_index(word)?
+        };
+
+        for (i, wav_path) in files.iter().enumerate() {
+            let sample_index = start_index + i;
+            let filename = wav_path.file_name().unwrap_or_default().to_string_lossy();
+
+            // Load WAV.
+            let (mut samples, _sr) = match wav::load_wav(wav_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("  ✗ {}: load error: {}", filename, e);
+                    skipped += 1;
+                    continue;
+                }
+            };
+
+            // Preprocess.
+            preprocess::preprocess(&mut samples, config.dsp.pre_emphasis);
+
+            // VAD trim.
+            let frame_length = config.frame_length_samples();
+            let frame_step = config.frame_step_samples();
+            let trimmed = energy_vad::trim_silence(
+                &samples,
+                config.audio.sample_rate,
+                frame_length,
+                frame_step,
+                &config.vad,
+            );
+
+            let speech_samples = match trimmed {
+                Some(s) => s,
+                None => {
+                    eprintln!("  ✗ {}: no speech detected, skipping", filename);
+                    skipped += 1;
+                    continue;
+                }
+            };
+
+            let duration_ms =
+                (speech_samples.len() as f32 / config.audio.sample_rate as f32 * 1000.0) as u32;
+            if duration_ms < config.vad.min_utterance_ms {
+                eprintln!(
+                    "  ✗ {}: too short ({}ms < {}ms), skipping",
+                    filename, duration_ms, config.vad.min_utterance_ms
+                );
+                skipped += 1;
+                continue;
+            }
+
+            // Extract features.
+            let mfcc = mfcc_extractor.extract(&speech_samples);
+            let mfcc = apply_feature_transforms(mfcc, config);
+
+            let template = Template {
+                word: word.clone(),
+                sample_index,
+                mfcc,
+            };
+            store.save_template(&template)?;
+            trained += 1;
+
+            println!(
+                "  ✓ {} -> sample {} ({:.0}ms, {} frames)",
+                filename, sample_index, duration_ms, template.mfcc.len()
+            );
+        }
+    }
+
+    println!();
+    println!("Training complete: {} templates created, {} skipped.", trained, skipped);
+
+    let counts = store.template_counts()?;
+    println!("Templates:");
+    for (word, count) in &counts {
+        println!("  {} — {} samples", word, count);
+    }
+    Ok(())
+}
+
+fn cmd_test_from(config: &SpeekConfig, wav_dir: &PathBuf, verbose: bool) -> Result<()> {
+    if !wav_dir.exists() {
+        bail!("Directory {:?} does not exist.", wav_dir);
+    }
+
+    // Load trained templates.
+    let store = TemplateStore::new(&config.paths.templates_dir)?;
+    let all_templates = store.load_all_templates()?;
+
+    if all_templates.is_empty() {
+        bail!("{}", SpeekError::NoTemplates);
+    }
+
+    let templates = averaging::compute_mean_templates(&all_templates);
+    let trained_words: Vec<&str> = templates.iter().map(|t| t.word.as_str()).collect();
+
+    let matcher = TemplateMatcher::new(
+        config.recognizer.sakoe_chiba_width,
+        config.recognizer.confidence_threshold,
+        config.recognizer.max_distance,
+    );
+
+    let mut mfcc_extractor =
+        MfccExtractor::new(config.audio.sample_rate, &config.dsp, &config.mfcc);
+
+    println!("Test suite from: {:?}", wav_dir);
+    println!("Trained words: {}", trained_words.join(", "));
+    println!("Using {} mean templates", templates.len());
+    println!();
+
+    // Discover test WAVs.
+    let entries = std::fs::read_dir(wav_dir)?;
+    let mut per_word_stats: Vec<(String, u32, u32, u32, Vec<f32>)> = Vec::new(); // word, correct, wrong, rejected, confidences
+
+    let mut total_correct = 0u32;
+    let mut total_wrong = 0u32;
+    let mut total_rejected = 0u32;
+    let mut total_no_speech = 0u32;
+
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+
+        let expected_word = entry
+            .file_name()
+            .to_str()
+            .unwrap_or("")
+            .to_lowercase();
+        if expected_word.is_empty() {
+            continue;
+        }
+
+        let mut wav_files: Vec<PathBuf> = std::fs::read_dir(entry.path())?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().map_or(false, |ext| ext == "wav"))
+            .collect();
+        wav_files.sort();
+
+        if wav_files.is_empty() {
+            continue;
+        }
+
+        let mut word_correct = 0u32;
+        let mut word_wrong = 0u32;
+        let mut word_rejected = 0u32;
+        let mut word_confidences: Vec<f32> = Vec::new();
+
+        if verbose {
+            println!("--- {} ({} files) ---", expected_word, wav_files.len());
+        }
+
+        for wav_path in &wav_files {
+            let filename = wav_path.file_name().unwrap_or_default().to_string_lossy();
+
+            let (mut samples, _sr) = match wav::load_wav(wav_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    if verbose {
+                        eprintln!("  ✗ {}: load error: {}", filename, e);
+                    }
+                    continue;
+                }
+            };
+
+            preprocess::preprocess(&mut samples, config.dsp.pre_emphasis);
+
+            let frame_length = config.frame_length_samples();
+            let frame_step = config.frame_step_samples();
+            let trimmed = energy_vad::trim_silence(
+                &samples,
+                config.audio.sample_rate,
+                frame_length,
+                frame_step,
+                &config.vad,
+            );
+
+            let speech = match trimmed {
+                Some(s) => s,
+                None => {
+                    if verbose {
+                        println!("  - {}: no speech detected", filename);
+                    }
+                    total_no_speech += 1;
+                    continue;
+                }
+            };
+
+            let mfcc = mfcc_extractor.extract(&speech);
+            let mfcc = apply_feature_transforms(mfcc, config);
+            let result = matcher.recognize(&mfcc, &templates);
+
+            word_confidences.push(result.confidence);
+
+            match &result.word {
+                Some(predicted) if predicted == &expected_word => {
+                    word_correct += 1;
+                    if verbose {
+                        println!(
+                            "  ✓ {}: {} (conf={:.0}%, dist={:.2})",
+                            filename, predicted, result.confidence * 100.0, result.best_distance
+                        );
+                    }
+                }
+                Some(predicted) => {
+                    word_wrong += 1;
+                    if verbose {
+                        println!(
+                            "  ✗ {}: {} (expected {}, conf={:.0}%, dist={:.2})",
+                            filename, predicted, expected_word, result.confidence * 100.0, result.best_distance
+                        );
+                    }
+                }
+                None => {
+                    word_rejected += 1;
+                    if verbose {
+                        println!(
+                            "  ? {}: rejected (conf={:.0}%, dist={:.2})",
+                            filename, result.confidence * 100.0, result.best_distance
+                        );
+                    }
+                }
+            }
+        }
+
+        total_correct += word_correct;
+        total_wrong += word_wrong;
+        total_rejected += word_rejected;
+        per_word_stats.push((expected_word, word_correct, word_wrong, word_rejected, word_confidences));
+    }
+
+    // Summary.
+    println!("========================================");
+    println!("TEST RESULTS");
+    println!("========================================");
+    println!();
+
+    println!("{:<12} {:>6} {:>6} {:>6} {:>6} {:>8}", "Word", "OK", "Wrong", "Rej", "Total", "Avg Conf");
+    println!("{}", "-".repeat(52));
+
+    for (word, correct, wrong, rejected, confidences) in &per_word_stats {
+        let total = correct + wrong + rejected;
+        let avg_conf = if confidences.is_empty() {
+            0.0
+        } else {
+            confidences.iter().sum::<f32>() / confidences.len() as f32 * 100.0
+        };
+        println!(
+            "{:<12} {:>6} {:>6} {:>6} {:>6} {:>7.1}%",
+            word, correct, wrong, rejected, total, avg_conf
+        );
+    }
+
+    println!("{}", "-".repeat(52));
+    let grand_total = total_correct + total_wrong + total_rejected;
+    let accuracy = if grand_total > 0 {
+        total_correct as f32 / grand_total as f32 * 100.0
+    } else {
+        0.0
+    };
+    println!(
+        "{:<12} {:>6} {:>6} {:>6} {:>6} {:>7.1}%",
+        "TOTAL", total_correct, total_wrong, total_rejected, grand_total, accuracy
+    );
+
+    if total_no_speech > 0 {
+        println!();
+        println!("Note: {} files had no speech detected (excluded from stats).", total_no_speech);
+    }
+
+    println!();
+    println!(
+        "Overall accuracy: {}/{} = {:.1}%",
+        total_correct, grand_total, accuracy
+    );
 
     Ok(())
 }
