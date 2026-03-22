@@ -80,7 +80,7 @@ pub fn update_debug_overlay(
         .unwrap_or(0.0);
 
     let score_info = score
-        .map(|s| format!("Score: {} | Combo: {}x | Dist: {:.0}m", s.points, s.combo, s.distance))
+        .map(|s| format!("Score: {} | Eaten: {} | Time: {:.0}s", s.total_points(), s.prey_eaten, s.time_survived))
         .unwrap_or_else(|| "No game active".to_string());
 
     let avg_latency = latency.average().as_millis();

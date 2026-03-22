@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use rand::Rng;
 
+use super::actors::{ActorKind, PlaceholderLabel, placeholder_color, placeholder_size};
 use super::lanes::Lane;
 
 /// The two object types that fall toward the player.
@@ -62,25 +63,34 @@ pub fn spawn_obstacle(commands: &mut Commands, spawner: &ObstacleSpawner) {
         FallingObject::Prey
     };
 
-    let color = match kind {
-        FallingObject::Prey => Color::srgb(0.2, 0.9, 0.2),
-        FallingObject::Predator => Color::srgb(0.9, 0.2, 0.2),
+    let actor = match kind {
+        FallingObject::Prey => ActorKind::random_prey(),
+        FallingObject::Predator => ActorKind::random_predator(),
     };
 
-    let size = match kind {
-        FallingObject::Prey => Vec2::new(50.0, 50.0),
-        FallingObject::Predator => Vec2::new(60.0, 60.0),
-    };
-
-    commands.spawn((
-        Obstacle,
-        kind,
-        ObstacleLane(lane),
-        Sprite {
-            color,
-            custom_size: Some(size),
-            ..default()
-        },
-        Transform::from_translation(Vec3::new(lane.x(), spawner.spawn_y, 0.0)),
-    ));
+    commands
+        .spawn((
+            Obstacle,
+            kind,
+            actor,
+            ObstacleLane(lane),
+            Sprite {
+                color: placeholder_color(&actor),
+                custom_size: Some(placeholder_size(&actor)),
+                ..default()
+            },
+            Transform::from_translation(Vec3::new(lane.x(), spawner.spawn_y, 0.0)),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                PlaceholderLabel,
+                Text2d::new(actor.label()),
+                TextFont {
+                    font_size: 11.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
+            ));
+        });
 }

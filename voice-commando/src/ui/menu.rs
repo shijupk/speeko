@@ -1,8 +1,5 @@
 use bevy::prelude::*;
 
-use crate::app_states::AppState;
-use crate::commands::types::{GameCommand, GameCommandEvent};
-
 #[derive(Component)]
 pub struct MenuUI;
 
@@ -21,9 +18,8 @@ pub fn setup_menu(mut commands: Commands) {
             BackgroundColor(Color::srgb(0.1, 0.1, 0.15)),
         ))
         .with_children(|parent| {
-            // Title
             parent.spawn((
-                Text::new("VOICE COMMANDO"),
+                Text::new("COMMANDO KOMODO"),
                 TextFont {
                     font_size: 64.0,
                     ..default()
@@ -31,9 +27,8 @@ pub fn setup_menu(mut commands: Commands) {
                 TextColor(Color::srgb(0.2, 0.8, 0.2)),
             ));
 
-            // Subtitle
             parent.spawn((
-                Text::new("Command Rush"),
+                Text::new("Voice-Controlled Survival"),
                 TextFont {
                     font_size: 32.0,
                     ..default()
@@ -45,7 +40,6 @@ pub fn setup_menu(mut commands: Commands) {
                 },
             ));
 
-            // Instructions
             parent.spawn((
                 Text::new("Say \"START\" or press ENTER to play"),
                 TextFont {
@@ -59,9 +53,8 @@ pub fn setup_menu(mut commands: Commands) {
                 },
             ));
 
-            // Keyboard hint
             parent.spawn((
-                Text::new("[C] Calibration  |  [ESC] Quit"),
+                Text::new("Voice commands: start | stop | left | right | yes | close"),
                 TextFont {
                     font_size: 18.0,
                     ..default()
@@ -73,31 +66,6 @@ pub fn setup_menu(mut commands: Commands) {
                 },
             ));
         });
-}
-
-pub fn menu_input_system(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut next_state: ResMut<NextState<AppState>>,
-    mut command_events: EventReader<GameCommandEvent>,
-) {
-    // Keyboard: Enter to start
-    if keyboard.just_pressed(KeyCode::Enter) {
-        next_state.set(AppState::Playing);
-        return;
-    }
-    // Keyboard: C for calibration
-    if keyboard.just_pressed(KeyCode::KeyC) {
-        next_state.set(AppState::Calibration);
-        return;
-    }
-
-    // Voice: "start" to play
-    for event in command_events.read() {
-        if event.command == GameCommand::Resume {
-            next_state.set(AppState::Playing);
-            return;
-        }
-    }
 }
 
 pub fn cleanup_menu(mut commands: Commands, query: Query<Entity, With<MenuUI>>) {

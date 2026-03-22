@@ -1,18 +1,24 @@
 use bevy::prelude::*;
 
+use crate::app_states::AppState;
+use crate::game::player::Player;
+use crate::game::plugin::LastCommand;
 use crate::game::scoring::Score;
 
 #[derive(Component)]
 pub struct HudUI;
 
 #[derive(Component)]
+pub struct EnergyText;
+
+#[derive(Component)]
 pub struct ScoreText;
 
 #[derive(Component)]
-pub struct ComboText;
+pub struct StateText;
 
 #[derive(Component)]
-pub struct DistanceText;
+pub struct LastCommandText;
 
 pub fn setup_hud(mut commands: Commands) {
     commands
@@ -31,51 +37,116 @@ pub fn setup_hud(mut commands: Commands) {
         ))
         .with_children(|parent| {
             parent.spawn((
+                EnergyText,
+                Text::new("Energy: 100"),
+                TextFont {
+                    font_size: 22.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.2, 1.0, 0.2)),
+            ));
+            parent.spawn((
                 ScoreText,
                 Text::new("Score: 0"),
                 TextFont {
-                    font_size: 24.0,
+                    font_size: 22.0,
                     ..default()
                 },
                 TextColor(Color::WHITE),
             ));
             parent.spawn((
-                ComboText,
-                Text::new("Combo: 0x"),
+                StateText,
+                Text::new("Running"),
                 TextFont {
-                    font_size: 24.0,
+                    font_size: 22.0,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.8, 0.0)),
+                TextColor(Color::srgb(0.8, 0.8, 0.2)),
             ));
             parent.spawn((
-                DistanceText,
-                Text::new("Distance: 0m"),
+                LastCommandText,
+                Text::new("Last: --"),
                 TextFont {
-                    font_size: 24.0,
+                    font_size: 18.0,
                     ..default()
                 },
-                TextColor(Color::WHITE),
+                TextColor(Color::srgb(0.6, 0.6, 0.6)),
             ));
         });
 }
 
 pub fn update_hud(
     score: Option<Res<Score>>,
-    mut score_text: Query<&mut Text, (With<ScoreText>, Without<ComboText>, Without<DistanceText>)>,
-    mut combo_text: Query<&mut Text, (With<ComboText>, Without<ScoreText>, Without<DistanceText>)>,
-    mut distance_text: Query<&mut Text, (With<DistanceText>, Without<ScoreText>, Without<ComboText>)>,
+    player_query: Query<&Player>,
+    last_cmd: Option<Res<LastCommand>>,
+    state: Res<State<AppState>>,
+    mut energy_text: Query<
+        (&mut Text, &mut TextColor),
+        (
+            With<EnergyText>,
+            Without<ScoreText>,
+            Without<StateText>,
+            Without<LastCommandText>,
+        ),
+    >,
+    mut score_text: Query<
+        &mut Text,
+        (
+            With<ScoreText>,
+            Without<EnergyText>,
+            Without<StateText>,
+            Without<LastCommandText>,
+        ),
+    >,
+    mut state_text: Query<
+        &mut Text,
+        (
+            With<StateText>,
+            Without<EnergyText>,
+            Without<ScoreText>,
+            Without<LastCommandText>,
+        ),
+    >,
+    mut cmd_text: Query<
+        &mut Text,
+        (
+            With<LastCommandText>,
+            Without<EnergyText>,
+            Without<ScoreText>,
+            Without<StateText>,
+        ),
+    >,
 ) {
-    let Some(score) = score else { return };
+    // Energy
+    if let Ok(player) = player_query.get_single() {
+        for (mut text, mut color) in energy_text.iter_mut() {
+            **text = format!("Energy: {:.0}", player.energy);
+            let t = (player.energy / 100.0).clamp(0.0, 1.0);
+            *color = TextColor(Color::srgb(1.0 - t, t, 0.2));
+        }
+    }
 
-    for mut text in score_text.iter_mut() {
-        **text = format!("Score: {}", score.points);
+    // Score
+    if let Some(ref score) = score {
+        for mut text in score_text.iter_mut() {
+            **text = format!("Score: {} ({} eaten)", score.total_points(), score.prey_eaten);
+        }
     }
-    for mut text in combo_text.iter_mut() {
-        **text = format!("Combo: {}x", score.combo);
+
+    // State
+    for mut text in state_text.iter_mut() {
+        **text = format!("{:?}", state.get());
     }
-    for mut text in distance_text.iter_mut() {
-        **text = format!("Distance: {:.0}m", score.distance);
+
+    // Last command
+    if let Some(ref last_cmd) = last_cmd {
+        for mut text in cmd_text.iter_mut() {
+            if last_cmd.text.is_empty() {
+                **text = "Last: --".to_string();
+            } else {
+                **text = format!("Last: {}", last_cmd.text);
+            }
+        }
     }
 }
 

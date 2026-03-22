@@ -144,14 +144,12 @@ fn default_confidence_threshold() -> f32 {
 pub struct GameConfig {
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u32,
-    #[serde(default = "default_jump_duration_ms")]
-    pub jump_duration_ms: u32,
-    #[serde(default = "default_slide_duration_ms")]
-    pub slide_duration_ms: u32,
-    #[serde(default = "default_lane_change_duration_ms")]
-    pub lane_change_duration_ms: u32,
-    #[serde(default = "default_freeze_duration_ms")]
-    pub freeze_duration_ms: u32,
+    #[serde(default = "default_energy_drain_per_sec")]
+    pub energy_drain_per_sec: f32,
+    #[serde(default = "default_energy_gain_per_prey")]
+    pub energy_gain_per_prey: f32,
+    #[serde(default = "default_prey_interaction_secs")]
+    pub prey_interaction_secs: f32,
     #[serde(default = "default_initial_scroll_speed")]
     pub initial_scroll_speed: f32,
     #[serde(default = "default_max_scroll_speed")]
@@ -168,10 +166,9 @@ impl Default for GameConfig {
     fn default() -> Self {
         Self {
             debounce_ms: default_debounce_ms(),
-            jump_duration_ms: default_jump_duration_ms(),
-            slide_duration_ms: default_slide_duration_ms(),
-            lane_change_duration_ms: default_lane_change_duration_ms(),
-            freeze_duration_ms: default_freeze_duration_ms(),
+            energy_drain_per_sec: default_energy_drain_per_sec(),
+            energy_gain_per_prey: default_energy_gain_per_prey(),
+            prey_interaction_secs: default_prey_interaction_secs(),
             initial_scroll_speed: default_initial_scroll_speed(),
             max_scroll_speed: default_max_scroll_speed(),
             audio: GameAudioConfig::default(),
@@ -182,12 +179,11 @@ impl Default for GameConfig {
 }
 
 fn default_debounce_ms() -> u32 { 300 }
-fn default_jump_duration_ms() -> u32 { 600 }
-fn default_slide_duration_ms() -> u32 { 500 }
-fn default_lane_change_duration_ms() -> u32 { 200 }
-fn default_freeze_duration_ms() -> u32 { 400 }
-fn default_initial_scroll_speed() -> f32 { 5.0 }
-fn default_max_scroll_speed() -> f32 { 15.0 }
+fn default_energy_drain_per_sec() -> f32 { 0.8 }
+fn default_energy_gain_per_prey() -> f32 { 25.0 }
+fn default_prey_interaction_secs() -> f32 { 3.5 }
+fn default_initial_scroll_speed() -> f32 { 0.15 }
+fn default_max_scroll_speed() -> f32 { 0.6 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameAudioConfig {

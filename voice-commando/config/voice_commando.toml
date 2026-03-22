@@ -33,12 +33,11 @@ confidence_threshold = 0.35
 
 [game]
 debounce_ms = 150
-jump_duration_ms = 800
-slide_duration_ms = 700
-lane_change_duration_ms = 250
-freeze_duration_ms = 500
-initial_scroll_speed = 0.4
-max_scroll_speed = 2.0
+energy_drain_per_sec = 0.8
+energy_gain_per_prey = 25.0
+prey_interaction_secs = 3.5
+initial_scroll_speed = 0.15
+max_scroll_speed = 0.6
 
 [game.audio]
 sfx_volume = 0.7

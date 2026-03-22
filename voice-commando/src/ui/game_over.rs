@@ -1,16 +1,14 @@
 use bevy::prelude::*;
 
-use crate::app_states::AppState;
-use crate::commands::types::{GameCommand, GameCommandEvent};
 use crate::game::scoring::Score;
 
 #[derive(Component)]
 pub struct GameOverUI;
 
 pub fn setup_game_over_ui(mut commands: Commands, score: Option<Res<Score>>) {
-    let (points, distance, max_combo) = score
-        .map(|s| (s.points, s.distance, s.max_combo))
-        .unwrap_or((0, 0.0, 0));
+    let (total, eaten, survived) = score
+        .map(|s| (s.total_points(), s.prey_eaten, s.time_survived))
+        .unwrap_or((0, 0, 0.0));
 
     commands
         .spawn((
@@ -36,7 +34,10 @@ pub fn setup_game_over_ui(mut commands: Commands, score: Option<Res<Score>>) {
             ));
 
             parent.spawn((
-                Text::new(format!("Score: {}  |  Distance: {:.0}m  |  Max Combo: {}x", points, distance, max_combo)),
+                Text::new(format!(
+                    "Score: {}  |  Prey eaten: {}  |  Survived: {:.0}s",
+                    total, eaten, survived
+                )),
                 TextFont {
                     font_size: 28.0,
                     ..default()
@@ -62,7 +63,7 @@ pub fn setup_game_over_ui(mut commands: Commands, score: Option<Res<Score>>) {
             ));
 
             parent.spawn((
-                Text::new("[ESC] Main Menu"),
+                Text::new("Say \"CLOSE\" or press ESC to return to title"),
                 TextFont {
                     font_size: 18.0,
                     ..default()
@@ -74,28 +75,6 @@ pub fn setup_game_over_ui(mut commands: Commands, score: Option<Res<Score>>) {
                 },
             ));
         });
-}
-
-pub fn game_over_input_system(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut next_state: ResMut<NextState<AppState>>,
-    mut command_events: EventReader<GameCommandEvent>,
-) {
-    if keyboard.just_pressed(KeyCode::Enter) {
-        next_state.set(AppState::Playing);
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::Escape) {
-        next_state.set(AppState::MainMenu);
-        return;
-    }
-
-    for event in command_events.read() {
-        if event.command == GameCommand::Resume {
-            next_state.set(AppState::Playing);
-            return;
-        }
-    }
 }
 
 pub fn cleanup_game_over_ui(mut commands: Commands, query: Query<Entity, With<GameOverUI>>) {
