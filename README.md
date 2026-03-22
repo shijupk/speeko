@@ -53,9 +53,9 @@ speeko train-from data/train_wavs --reset
 You can still use the direct mic training flow:
 
 ```bash
-speeko train start --samples 5
-speeko train stop --samples 5
-speeko train open --samples 5
+speeko train start --samples 50
+speeko train stop --samples 50
+speeko train open --samples 50
 # ... repeat for each word in vocabulary.txt
 ```
 
