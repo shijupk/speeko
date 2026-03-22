@@ -1,0 +1,138 @@
+You are a senior game architect, senior Rust engineer, and product manager.
+
+I want you to generate a complete Product Requirements Document (PRD) for a Rust game project with strong technical depth and implementation awareness.
+
+## Product idea
+I have already built an offline speech recognition engine in Rust. It can reliably recognize the following 10 words with very low latency:
+
+- start
+- stop
+- open
+- close
+- up
+- down
+- left
+- right
+- yes
+- no
+
+I want to build a speech-controlled 2D game in Rust, inspired by Chrome Dino / endless runner style gameplay, but designed specifically for discrete voice commands instead of keyboard typing.
+
+This should be a real product-oriented PRD, not just a casual feature list.
+
+## Core concept
+The game is voice-first, not keyboard-first.
+The game should be designed around:
+- discrete voice commands
+- timing windows
+- lane-based or action-based movement
+- contextual interactions
+- lightweight gameplay
+- offline operation
+- desktop-first MVP, with future path to smaller devices / embedded targets
+
+## Main gameplay assumptions
+The initial MVP should be a 2D endless runner / command-action game.
+
+Use these example mappings unless you find a better product-oriented mapping:
+- up -> jump
+- down -> slide / duck
+- left -> move left lane
+- right -> move right lane
+- stop -> freeze / brace / pause
+- start -> begin / resume
+- open -> open gate / activate route
+- close -> close shield / barrier / hatch
+- yes -> accept route / reward / choice
+- no -> reject route / alternate choice
+
+## What I need in the PRD
+Generate a detailed product requirements document with strong structure and practical engineering awareness.
+
+Include these sections:
+
+1. Product title
+2. Executive summary
+3. Product vision
+4. Problem statement
+5. Goals
+6. Non-goals
+7. Target users
+8. Core gameplay concept
+9. MVP scope
+10. Functional requirements
+11. Non-functional requirements
+12. Gameplay mechanics
+13. Command mapping and interaction model
+14. UX requirements
+15. Calibration mode requirements
+16. Debug / diagnostics requirements
+17. Performance requirements
+18. Reliability requirements
+19. Portability requirements
+20. Architecture expectations
+21. Suggested module breakdown
+22. Suggested Rust libraries and why each is recommended
+23. Alternatives to each important library and tradeoffs
+24. Testing strategy
+25. Risks and mitigations
+26. Milestones / phased roadmap
+27. Definition of MVP done
+28. Future enhancements
+
+## Very important library guidance
+I want explicit suggestions for Rust libraries to use, with reasoning.
+
+Cover at least:
+- game engine
+- microphone/audio input
+- sound effects/music playback
+- configuration
+- serialization
+- logging/tracing
+- error handling
+- CLI / tooling
+- benchmarking / performance measurement
+- concurrency or queueing if needed
+
+Prefer practical libraries suitable for a serious Rust codebase.
+
+## Architecture expectations
+The design should align with a Bevy ECS architecture and modular plugins, but the PRD should remain product-focused, not just engine-focused.
+
+The system should conceptually separate:
+- microphone capture
+- speech recognition
+- recognized word stream
+- command mapping / debounce / cooldown
+- gameplay state mutation
+- UI feedback
+- diagnostics
+
+## Product constraints
+- offline only
+- no external APIs
+- no cloud speech service
+- no ready-made speech recognition library for the core recognition logic
+- small vocabulary
+- fast response
+- low footprint
+- maintainable Rust codebase
+- architecture should be clean and extensible
+
+## Writing style
+- professional
+- detailed
+- structured
+- practical
+- implementation-aware
+- suitable for a real GitHub project and technical design discussion
+- avoid fluffy marketing language
+- focus on clarity and product usefulness
+
+## Output format
+Produce the final answer as a polished markdown PRD.
+Use clear headings.
+Use concise but substantive explanations.
+Use tables where useful.
+Be explicit about tradeoffs and engineering choices.

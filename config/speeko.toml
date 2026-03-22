@@ -30,7 +30,7 @@ use_cmn = true
 
 [recognizer]
 mode = "cnn"               # "dtw" or "cnn"
-confidence_threshold = 0.2
+confidence_threshold = 0.4
 max_distance = 80.0
 sakoe_chiba_width = 0.2
 min_samples_per_word = 3

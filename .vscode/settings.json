@@ -1,0 +1,7 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "cargo search": true,
+        "cargo info": true
+    },
+    "rust-analyzer.cargo.targetDir": "target/ra"
+}

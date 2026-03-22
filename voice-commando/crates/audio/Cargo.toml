@@ -1,0 +1,13 @@
+[package]
+name = "vc-audio"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75.0"
+
+[dependencies]
+vc-common = { path = "../common" }
+cpal = "~0.15"
+hound = "~3.5"
+ringbuf = "0.4"
+anyhow = "~1.0"
+log = "~0.4"

@@ -1,0 +1,56 @@
+[audio]
+sample_rate = 16000
+
+[dsp]
+pre_emphasis = 0.97
+frame_length_ms = 25.0
+frame_step_ms = 10.0
+fft_size = 512
+
+[vad]
+silence_frames = 10
+threshold_factor = 5.0
+min_utterance_ms = 200
+max_utterance_ms = 1200
+hangover_ms = 80
+padding_ms = 30
+min_energy = 0.0005
+
+[mfcc]
+num_mel_filters = 26
+num_coefficients = 13
+low_freq = 0.0
+high_freq = 8000.0
+use_deltas = true
+use_cmn = true
+
+[classifier]
+max_frames = 100
+model_dir = "../data/models"
+
+[recognition]
+confidence_threshold = 0.35
+
+[game]
+debounce_ms = 150
+jump_duration_ms = 800
+slide_duration_ms = 700
+lane_change_duration_ms = 250
+freeze_duration_ms = 500
+initial_scroll_speed = 0.4
+max_scroll_speed = 2.0
+
+[game.audio]
+sfx_volume = 0.7
+bgm_volume = 0.3
+play_bgm = true
+
+[game.display]
+fullscreen = false
+resolution = [1280, 720]
+debug_overlay = false
+
+[game.ring_buffer]
+buffer_seconds = 2.0
+recognizer_poll_ms = 30
+post_recognition_cooldown_ms = 500

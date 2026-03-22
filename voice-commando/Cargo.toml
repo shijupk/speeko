@@ -1,0 +1,59 @@
+[package]
+name = "voice-commando"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75.0"
+
+[[bin]]
+name = "voice-commando"
+path = "src/main.rs"
+
+[workspace]
+members = [
+    "crates/common",
+    "crates/audio",
+    "crates/dsp",
+    "crates/vad",
+    "crates/features",
+    "crates/classifier",
+]
+
+[dependencies]
+# --- Copied crates (renamed vc-*, local to game project) ---
+vc-common     = { path = "crates/common" }
+vc-audio      = { path = "crates/audio" }
+vc-dsp        = { path = "crates/dsp" }
+vc-vad        = { path = "crates/vad" }
+vc-features   = { path = "crates/features" }
+vc-classifier = { path = "crates/classifier" }
+
+# --- Game engine ---
+bevy = "0.15"
+
+# --- Audio playback (SFX/music) ---
+# bevy_kira_audio = "0.21"  # TODO: enable when adding SFX
+
+# --- Serialization & config ---
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# --- Error handling ---
+thiserror = "2.0"
+anyhow = "1.0"
+
+# --- Logging / diagnostics ---
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# --- CLI ---
+clap = { version = "4.5", features = ["derive"] }
+
+# --- Concurrency ---
+crossbeam-channel = "0.5"
+ringbuf = "0.4"
+
+# --- Random (obstacle spawning, etc.) ---
+rand = "0.8"
+
+[dev-dependencies]
+env_logger = "0.11"

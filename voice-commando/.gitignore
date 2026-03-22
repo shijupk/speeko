@@ -1,0 +1,5 @@
+# Build artifacts
+/target/
+
+# Allow .vscode settings for rust-analyzer config
+!.vscode/
