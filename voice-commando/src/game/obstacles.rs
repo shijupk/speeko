@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use rand::Rng;
 
-use super::actors::{ActorKind, PlaceholderLabel, placeholder_color, placeholder_size};
+use super::actors::{ActorKind, AnimalSprites, SpriteAnimation, SPRITE_COLUMNS};
 use super::lanes::Lane;
 
 /// The two object types that fall toward the player.
@@ -47,7 +47,11 @@ impl ObstacleSpawner {
 }
 
 /// Spawn a random prey or predator in a random lane.
-pub fn spawn_obstacle(commands: &mut Commands, spawner: &ObstacleSpawner) {
+pub fn spawn_obstacle(
+    commands: &mut Commands,
+    spawner: &ObstacleSpawner,
+    sprites: &AnimalSprites,
+) {
     let mut rng = rand::thread_rng();
 
     let lane = match rng.gen_range(0..3) {
@@ -56,8 +60,8 @@ pub fn spawn_obstacle(commands: &mut Commands, spawner: &ObstacleSpawner) {
         _ => Lane::Right,
     };
 
-    // ~40% predator, ~60% prey
-    let kind = if rng.gen_range(0..10) < 4 {
+    // ~35% predator, ~65% prey
+    let kind = if rng.gen_range(0..100) < 35 {
         FallingObject::Predator
     } else {
         FallingObject::Prey
@@ -68,29 +72,26 @@ pub fn spawn_obstacle(commands: &mut Commands, spawner: &ObstacleSpawner) {
         FallingObject::Predator => ActorKind::random_predator(),
     };
 
-    commands
-        .spawn((
-            Obstacle,
-            kind,
-            actor,
-            ObstacleLane(lane),
-            Sprite {
-                color: placeholder_color(&actor),
-                custom_size: Some(placeholder_size(&actor)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(lane.x(), spawner.spawn_y, 0.0)),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                PlaceholderLabel,
-                Text2d::new(actor.label()),
-                TextFont {
-                    font_size: 11.0,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-                Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
-            ));
-        });
+    let (image, layout) = sprites
+        .map
+        .get(&actor)
+        .expect("missing sprite for actor");
+
+    commands.spawn((
+        Obstacle,
+        kind,
+        actor,
+        ObstacleLane(lane),
+        SpriteAnimation::new(0, SPRITE_COLUMNS as usize, 5.0),
+        Sprite {
+            image: image.clone(),
+            texture_atlas: Some(TextureAtlas {
+                layout: layout.clone(),
+                index: 0,
+            }),
+            custom_size: Some(actor.display_size()),
+            ..default()
+        },
+        Transform::from_translation(Vec3::new(lane.x(), spawner.spawn_y, 0.0)),
+    ));
 }

@@ -22,11 +22,11 @@ impl Difficulty {
 
     pub fn update(&mut self, delta: f32) {
         self.time_elapsed += delta;
-        // Ramp over 5 minutes (300s) instead of 3 — voice recognition
-        // needs ~2s per command so the game must stay manageable.
-        let t = (self.time_elapsed / 300.0).min(1.0);
+        // Ramp over 7 minutes (420s) — voice recognition needs ~2s per
+        // command so the game must stay manageable.
+        let t = (self.time_elapsed / 420.0).min(1.0);
         self.scroll_speed = self.initial_speed + t * (self.max_speed - self.initial_speed);
-        // Spawn rate: 0.15 → 0.35 objects/sec (one every ~3-7s)
-        self.spawn_rate = 0.15 + t * 0.20;
+        // Spawn rate: 0.15 → 0.30 objects/sec (one every ~3-7s)
+        self.spawn_rate = 0.15 + t * 0.15;
     }
 }

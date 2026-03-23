@@ -54,7 +54,10 @@ pub fn setup_menu(mut commands: Commands) {
             ));
 
             parent.spawn((
-                Text::new("Voice commands: start | stop | left | right | yes | close"),
+                Text::new(
+                    "start = start/resume  |  stop = pause  |  close = end\n\
+                     left = move left  |  right = move right  |  yes = eat prey",
+                ),
                 TextFont {
                     font_size: 18.0,
                     ..default()

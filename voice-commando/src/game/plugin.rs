@@ -5,8 +5,8 @@ use crate::commands::types::{GameCommand, GameCommandEvent};
 use crate::config_resource::GameConfigRes;
 
 use super::actors::{
-    placeholder_color, placeholder_size, brighten, ActorKind, AnimationState, AnimationTimer,
-    PlaceholderLabel,
+    ActorKind, AnimationState, AnimationTimer, AnimalSprites, SpriteAnimation,
+    load_animal_sprites, SPRITE_COLUMNS,
 };
 use super::difficulty::Difficulty;
 use super::lanes::LANE_POSITIONS;
@@ -32,6 +32,8 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastCommand>()
+            // Load sprite sheets once at startup
+            .add_systems(Startup, load_animal_sprites)
             // Idle: listen for "start"
             .add_systems(
                 Update,
@@ -51,6 +53,7 @@ impl Plugin for GamePlugin {
                     difficulty_system,
                     scoring_system,
                     animation_timer_system,
+                    animate_sprites,
                     player_visual_system,
                     check_death_system,
                 )
@@ -97,7 +100,7 @@ fn idle_command_system(
 // State: Running — setup / cleanup
 // ---------------------------------------------------------------------------
 
-fn setup_game(mut commands: Commands, config: Res<GameConfigRes>) {
+fn setup_game(mut commands: Commands, config: Res<GameConfigRes>, sprites: Res<AnimalSprites>) {
     commands.insert_resource(Score::default());
     commands.insert_resource(Difficulty::new(
         config.game.initial_scroll_speed,
@@ -107,31 +110,25 @@ fn setup_game(mut commands: Commands, config: Res<GameConfigRes>) {
 
     // Spawn player (Komodo dragon) at center lane
     let komodo = ActorKind::Komodo;
-    commands
-        .spawn((
-            Player::default(),
-            PlayerSprite,
-            komodo,
-            AnimationState::Idle,
-            Sprite {
-                color: placeholder_color(&komodo),
-                custom_size: Some(placeholder_size(&komodo)),
-                ..default()
-            },
-            Transform::from_translation(Vec3::new(0.0, -250.0, 1.0)),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                PlaceholderLabel,
-                Text2d::new(komodo.label()),
-                TextFont {
-                    font_size: 12.0,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-                Transform::from_translation(Vec3::new(0.0, 0.0, 0.1)),
-            ));
-        });
+    let (image, layout) = sprites.map.get(&komodo).expect("missing komodo sprite");
+
+    commands.spawn((
+        Player::default(),
+        PlayerSprite,
+        komodo,
+        AnimationState::Idle,
+        SpriteAnimation::new(0, SPRITE_COLUMNS as usize, 5.0),
+        Sprite {
+            image: image.clone(),
+            texture_atlas: Some(TextureAtlas {
+                layout: layout.clone(),
+                index: 0,
+            }),
+            custom_size: Some(komodo.display_size()),
+            ..default()
+        },
+        Transform::from_translation(Vec3::new(0.0, -250.0, 1.0)),
+    ));
 
     // Lane marker backgrounds
     for &x in LANE_POSITIONS.iter() {
@@ -244,6 +241,7 @@ fn obstacle_spawn_system(
     time: Res<Time>,
     mut spawner: ResMut<ObstacleSpawner>,
     difficulty: Res<Difficulty>,
+    sprites: Res<AnimalSprites>,
 ) {
     let interval = 1.0 / difficulty.spawn_rate;
     spawner
@@ -251,7 +249,7 @@ fn obstacle_spawn_system(
         .set_duration(std::time::Duration::from_secs_f32(interval));
     spawner.spawn_timer.tick(time.delta());
     if spawner.spawn_timer.just_finished() {
-        spawn_obstacle(&mut commands, &spawner);
+        spawn_obstacle(&mut commands, &spawner, &sprites);
     }
 }
 
@@ -359,13 +357,37 @@ fn scoring_system(time: Res<Time>, mut score: ResMut<Score>) {
     score.tick(time.delta_secs());
 }
 
+// ---------------------------------------------------------------------------
+// Sprite-sheet frame animation — ticks all SpriteAnimation timers
+// ---------------------------------------------------------------------------
+
+fn animate_sprites(
+    time: Res<Time>,
+    mut query: Query<(&mut SpriteAnimation, &mut Sprite)>,
+) {
+    for (mut anim, mut sprite) in query.iter_mut() {
+        anim.frame_timer.tick(time.delta());
+        if anim.frame_timer.just_finished() {
+            if let Some(ref mut atlas) = sprite.texture_atlas {
+                let mut next = atlas.index + 1;
+                if next > anim.last_frame {
+                    next = anim.first_frame;
+                }
+                atlas.index = next;
+            }
+        }
+    }
+}
+
 fn player_visual_system(
     mut query: Query<
-        (&Player, &AnimationState, &ActorKind, &mut Transform, &mut Sprite),
+        (&Player, &AnimationState, &mut Transform, &mut Sprite, &mut SpriteAnimation),
         With<PlayerSprite>,
     >,
 ) {
-    let Ok((player, anim_state, kind, mut transform, mut sprite)) = query.get_single_mut() else {
+    let Ok((player, anim_state, mut transform, mut sprite, mut anim)) =
+        query.get_single_mut()
+    else {
         return;
     };
 
@@ -373,24 +395,26 @@ fn player_visual_system(
     transform.translation.x = player.lane.x();
     transform.translation.y = -250.0;
 
-    // Base color from animation state
-    let base = match anim_state {
-        AnimationState::Idle => placeholder_color(kind),
-        AnimationState::WalkLeft | AnimationState::WalkRight => {
-            brighten(placeholder_color(kind), 0.15)
+    // Update sprite-sheet row from animation state
+    let cols = SPRITE_COLUMNS as usize;
+    let row = anim_state.row_index();
+    let first = row * cols;
+    let last = first + cols - 1;
+    if anim.first_frame != first {
+        anim.first_frame = first;
+        anim.last_frame = last;
+        // Jump to the first frame of the new row immediately
+        if let Some(ref mut atlas) = sprite.texture_atlas {
+            atlas.index = first;
         }
-        AnimationState::Eat => Color::srgb(0.2, 1.0, 0.3),
-        AnimationState::Hurt => Color::srgb(1.0, 0.2, 0.2),
-        AnimationState::Death => Color::srgb(0.3, 0.3, 0.3),
-    };
+    }
 
-    // Tint toward red as energy drops
+    // Tint toward red as energy drops (sprite color modulation)
     let energy_t = (player.energy / 100.0).clamp(0.0, 1.0);
-    let b = base.to_srgba();
     sprite.color = Color::srgb(
-        b.red * energy_t + (1.0 - energy_t),
-        b.green * energy_t,
-        b.blue * energy_t * 0.5,
+        energy_t + (1.0 - energy_t),          // always ≥ energy_t
+        energy_t,
+        energy_t * 0.5,
     );
 }
 

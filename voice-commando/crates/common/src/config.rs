@@ -179,11 +179,11 @@ impl Default for GameConfig {
 }
 
 fn default_debounce_ms() -> u32 { 300 }
-fn default_energy_drain_per_sec() -> f32 { 0.8 }
-fn default_energy_gain_per_prey() -> f32 { 25.0 }
-fn default_prey_interaction_secs() -> f32 { 3.5 }
-fn default_initial_scroll_speed() -> f32 { 0.15 }
-fn default_max_scroll_speed() -> f32 { 0.6 }
+fn default_energy_drain_per_sec() -> f32 { 0.3 }
+fn default_energy_gain_per_prey() -> f32 { 40.0 }
+fn default_prey_interaction_secs() -> f32 { 4.5 }
+fn default_initial_scroll_speed() -> f32 { 0.12 }
+fn default_max_scroll_speed() -> f32 { 0.45 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameAudioConfig {

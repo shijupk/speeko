@@ -33,11 +33,11 @@ confidence_threshold = 0.35
 
 [game]
 debounce_ms = 150
-energy_drain_per_sec = 0.8
-energy_gain_per_prey = 25.0
-prey_interaction_secs = 3.5
-initial_scroll_speed = 0.15
-max_scroll_speed = 0.6
+energy_drain_per_sec = 0.3
+energy_gain_per_prey = 40.0
+prey_interaction_secs = 4.5
+initial_scroll_speed = 0.12
+max_scroll_speed = 0.45
 
 [game.audio]
 sfx_volume = 0.7
